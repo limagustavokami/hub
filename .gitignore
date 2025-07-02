@@ -1,0 +1,27 @@
+# Arquivos de autenticação
+file.json
+meli_auth.json
+meli.json
+amz_auth.json
+
+# Ambiente virtual
+venv/
+env/
+.env
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Arquivos de dados
+sem_dados_urls.json
+
+# IDEs e editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log 
