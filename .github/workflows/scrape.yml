@@ -17,10 +17,14 @@ jobs:
       with:
         python-version: '3.x'
     
-    - name: Create auth files
+    - name: Salvar meli_auth.json
       run: |
-        echo '${{ secrets.MELI_AUTH }}' > meli_auth.json
-        echo '${{ secrets.AMAZON_AUTH }}' > amz_auth.json
+        echo "$MELI_AUTH" > meli_auth.json
+        echo "$AMZ_AUTH" > amz_auth.json
+      shell: bash
+      env:
+        MELI_AUTH: ${{ secrets.MELI_AUTH }}
+        AMZ_AUTH: ${{ secrets.AMZ_AUTH }}
       
     - name: Install dependencies
       run: |
