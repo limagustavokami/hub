@@ -1,0 +1,35 @@
+name: Web Scraping Workflow
+
+on:
+  schedule:
+    - cron: '*/45 * * * *'  # Runs every 20 minutes
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Create auth files
+      run: |
+        echo '${{ secrets.MELI_AUTH }}' > meli_auth.json
+        echo '${{ secrets.AMAZON_AUTH }}' > amz_auth.json
+      
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        playwright install chromium
+        playwright install-deps
+        
+    - name: Run scraper
+      env:
+        API_URL: ${{ secrets.API_URL }}
+      run: python execucao.py 
