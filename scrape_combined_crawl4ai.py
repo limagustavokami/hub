@@ -1,16 +1,16 @@
 import asyncio
-import re
 import json
+import os
+import re
+import time
 from datetime import datetime
+from pprint import pprint
+
 import aiohttp
 from crawl4ai import AsyncWebCrawler
-import os
-from playwright.async_api import async_playwright, Error as PlaywrightError
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import async_playwright
 from playwright.sync_api import sync_playwright
-import re
-import json
-from pprint import pprint
-import time
 
 
 async def scrape_epoca_cosmeticos(url):
@@ -137,35 +137,41 @@ async def extract_data_from_amazon(target_url: str) -> list:
     Returns:
         list: Lista de dicionários com dados dos vendedores.
     """
+    start_time = time.time()
     lojas = []
     storage_file = "amz_auth.json"
 
-    # Verifica se o arquivo de storage existe
+    # Verificar se o arquivo de autenticação existe
     if not os.path.exists(storage_file):
         print(f"Erro: Arquivo de autenticação {storage_file} não encontrado.")
         return lojas
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)  # Mantido como False para depuração
-        try:
-            # Carrega cookies do arquivo amz_auth.json
-            with open(storage_file, 'r') as f:
-                auth_data = json.load(f)
-                context = await browser.new_context()
-                await context.add_cookies(auth_data.get('cookies', []))
-        except Exception as e:
-            print(f"Erro ao carregar cookies: {e}")
-            return lojas
-
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
         page = await context.new_page()
 
         try:
-            # Navega para a URL
-            print(f"Navegando para {target_url}")
-            await page.goto(target_url, timeout=60000)
-            await page.wait_for_load_state('domcontentloaded', timeout=30000)
+            # Carregar cookies
+            try:
+                with open(storage_file, 'r') as f:
+                    auth_data = json.load(f)
+                    await context.add_cookies(auth_data.get('cookies', []))
+                print(f"After loading cookies: {time.time() - start_time:.2f} seconds")
+            except Exception as e:
+                print(f"Erro ao carregar cookies: {e}")
+                return lojas
 
-            # Extrai SKU da URL
+            # Navegar para a URL
+            print(f"Navegando para {target_url}")
+            response = await page.goto(target_url, timeout=30000)
+            if response and response.status != 200:
+                print(f"Falha ao carregar página {target_url}. Status: {response.status}")
+                return lojas
+            await page.wait_for_load_state('domcontentloaded', timeout=15000)
+            print(f"After navigation: {time.time() - start_time:.2f} seconds")
+
+            # Extrair SKU
             sku = "SKU não encontrado"
             try:
                 match = re.search(r'/dp/([A-Z0-9]{10})', target_url)
@@ -174,125 +180,121 @@ async def extract_data_from_amazon(target_url: str) -> list:
             except Exception as e:
                 print(f"Erro ao extrair SKU: {e}")
 
-            # Extrai descrição
-            descricao = "Descrição não encontrada"
-            try:
-                desc_element = await page.locator('#productTitle').first.inner_text(timeout=10000)
-                descricao = desc_element.strip()
-            except Exception as e:
-                print(f"Erro ao extrair descrição: {e}")
-
-            # Extrai imagem
-            imagem = "Imagem não encontrada"
-            try:
-                imagem = await page.locator('#landingImage').first.get_attribute('src', timeout=10000)
-            except Exception as e:
-                print(f"Erro ao extrair imagem: {e}")
-
-            # Extrai review
-            review = 4.5
-            try:
-                # Tenta o seletor principal com aria-hidden
-                review_span = page.locator('a.a-popover-trigger.a-declarative span.a-size-base.a-color-base[aria-hidden="true"]').first
-                review_text = await review_span.inner_text(timeout=10000) or ""
-                review_text = review_text.strip()  # Remove espaços em branco
-                print(f"Texto da review capturado: '{review_text}'")
-                if review_text and re.match(r'^\d+\.\d$', review_text.replace(',', '.')):
-                    review = float(review_text.replace(',', '.'))
-                else:
-                    print("Review não encontrada ou inválida, tentando fallback.")
-                    # Tenta o seletor de fallback
-                    review_span_fallback = page.locator('span.a-size-base.a-color-base').first
-                    review_text_fallback = await review_span_fallback.inner_text(timeout=10000) or ""
-                    review_text_fallback = review_text_fallback.strip()  # Remove espaços em branco
-                    print(f"Texto da review (fallback): '{review_text_fallback}'")
-                    if review_text_fallback and re.match(r'^\d+\.\d$', review_text_fallback.replace(',', '.')):
-                        review = float(review_text_fallback.replace(',', '.'))
-                    else:
-                        print("Review não encontrada no fallback, usando padrão 4.5")
-            except Exception as e:
-                print(f"Erro ao extrair review: {e}")
-
-            # Extrai vendedor e preço da página principal
-            try:
-                seller_name = "Não informado"
-                preco_final = 0.0
+            # Funções para extração concorrente
+            async def get_description():
                 try:
-                    seller = page.locator("#sellerProfileTriggerId").first
-                    seller_name = await seller.inner_text(timeout=10000) or "Não informado"
-                    seller_name = re.sub(r'Vendido por\s*', '', seller_name).strip()
-
-                    price_span = page.locator('div.a-section.a-spacing-micro span.a-offscreen').first
-                    price_text_raw = await price_span.inner_text(timeout=10000) or "0.00"
-                    price_text = re.sub(r'[^\d,.]', '', price_text_raw).replace(',', '.')
-                    if re.match(r'^\d+\.\d+$', price_text):
-                        preco_final = float(price_text)
-                    else:
-                        print(f"Preço inválido na página principal: {price_text}")
-
-                    if seller_name != "Não informado" and preco_final > 0.0:
-                        key_loja = seller_name.lower().replace(' ', '')
-                        key_sku = f"{key_loja}_{sku}" if sku != "SKU não encontrado" else f"{key_loja}_sem_sku"
-                        lojas.append({
-                            'sku': sku,
-                            'loja': seller_name,
-                            'preco_final': preco_final,
-                            'data_hora': datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
-                            'marketplace': 'Amazon',
-                            'key_loja': key_loja,
-                            'key_sku': key_sku,
-                            'descricao': descricao,
-                            'review': review,
-                            'imagem': imagem,
-                            'status': 'ativo'
-                        })
-                        print(f"Vendedor principal capturado: {seller_name}, Preço: {preco_final}")
+                    await page.wait_for_selector('#productTitle', timeout=7000)
+                    return (await page.locator('#productTitle').first.inner_text()).strip()
                 except Exception as e:
-                    print(f"Erro ao extrair vendedor/preço da página principal: {e}")
-            except Exception as e:
-                print(f"Erro geral ao processar vendedor principal: {e}")
+                    print(f"Erro ao extrair descrição: {e}")
+                    return "Descrição não encontrada"
 
-            # Acessa a página de outras ofertas
+            async def get_image():
+                try:
+                    await page.wait_for_selector('#landingImage', timeout=7000)
+                    return await page.locator('#landingImage').first.get_attribute('src')
+                except Exception as e:
+                    print(f"Erro ao extrair imagem: {e}")
+                    return "Imagem não encontrada"
+
+            async def get_review():
+                try:
+                    review_span = page.locator('a.a-popover-trigger span[aria-hidden="true"]').first
+                    review_text = (await review_span.inner_text(timeout=7000)).strip()
+                    print(f"Texto da review capturado: '{review_text}'")
+                    if review_text and re.match(r'^\d+\.\d$', review_text.replace(',', '.')):
+                        return float(review_text.replace(',', '.'))
+                    print("Review não encontrada ou inválida, usando padrão 4.5")
+                    return 4.5
+                except Exception as e:
+                    print(f"Erro ao extrair review: {e}")
+                    return 4.5
+
+            # Executar extração concorrente
+            descricao, imagem, review = await asyncio.gather(
+                get_description(),
+                get_image(),
+                get_review()
+            )
+            print(f"After element extraction: {time.time() - start_time:.2f} seconds")
+
+            # Extrair vendedor principal e preço
+            seller_name = "Não informado"
+            preco_final = 0.0
+            try:
+                seller = page.locator("#sellerProfileTriggerId").first
+                seller_name = (await seller.inner_text(timeout=7000)).strip()
+                seller_name = re.sub(r'Vendido por\s*', '', seller_name).strip()
+
+                price_span = page.locator('div.a-section.a-spacing-micro span.a-offscreen').first
+                price_text = re.sub(r'[^\d,.]', '', (await price_span.inner_text(timeout=7000)).strip()).replace(',', '.')
+                if re.match(r'^\d+\.\d+$', price_text):
+                    preco_final = float(price_text)
+                else:
+                    print(f"Preço inválido na página principal: {price_text}")
+
+                if seller_name != "Não informado" and preco_final > 0.0:
+                    key_loja = seller_name.lower().replace(' ', '')
+                    key_sku = f"{key_loja}_{sku}" if sku != "SKU não encontrado" else f"{key_loja}_sem_sku"
+                    lojas.append({
+                        'sku': sku,
+                        'loja': seller_name,
+                        'preco_final': preco_final,
+                        'data_hora': datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
+                        'marketplace': 'Amazon',
+                        'key_loja': key_loja,
+                        'key_sku': key_sku,
+                        'descricao': descricao,
+                        'review': review,
+                        'imagem': imagem,
+                        'status': 'ativo'
+                    })
+                    print(f"Vendedor principal capturado: {seller_name}, Preço: {preco_final}")
+            except Exception as e:
+                print(f"Erro ao extrair vendedor/preço da página principal: {e}")
+
+            # Acessar página de ofertas
             try:
                 compare_button = page.get_by_role("button", name=re.compile("Comparar outras.*ofertas|Ver todas as ofertas"))
-                await compare_button.wait_for(state='visible', timeout=20000)
-                await compare_button.click()
-                print("Botão de comparação clicado")
+                await compare_button.wait_for(state='visible', timeout=10000)
+                print("Botão de comparação encontrado")
+                await compare_button.click(timeout=10000)
+                print(f"After clicking compare button: {time.time() - start_time:.2f} seconds")
 
                 details_link = page.get_by_role("link", name="Ver mais detalhes sobre esta")
-                await details_link.wait_for(state='visible', timeout=20000)
-                await details_link.click()
-                print("Link 'Ver mais detalhes sobre esta' clicado")
+                await details_link.wait_for(state='visible', timeout=10000)
+                print("Link 'Ver mais detalhes' encontrado")
+                await details_link.click(timeout=10000)
+                print(f"After clicking details link: {time.time() - start_time:.2f} seconds")
+
+                await page.wait_for_load_state('domcontentloaded', timeout=15000)
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(2000)
+                print(f"After loading offers page: {time.time() - start_time:.2f} seconds")
             except Exception as e:
                 print(f"Erro ao acessar página de ofertas: {e}")
+                print("Page content for debugging:", await page.content()[:1000])
                 return lojas
 
-            # Aguarda carregamento da página de ofertas
-            await page.wait_for_load_state('domcontentloaded', timeout=30000)
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(5000)  # Aumentado para garantir carregamento dinâmico
-
-            # Extrai ofertas
+            # Extrair ofertas
             try:
-                await page.wait_for_selector("#aod-offer", timeout=20000)
+                await page.wait_for_selector("#aod-offer", timeout=10000)
                 offer_elements = await page.locator("#aod-offer").all()
                 print(f"Encontradas {len(offer_elements)} ofertas")
                 for i, offer in enumerate(offer_elements, 1):
                     try:
-                        # Extrai preço
                         preco_final = 0.0
                         try:
                             price_span = offer.locator('span.aok-offscreen').first
-                            price_text_raw = await price_span.inner_text(timeout=10000) or "0.00"
-                            price_text = re.sub(r'[^\d,.]', '', price_text_raw).replace(',', '.')
+                            price_text = re.sub(r'[^\d,.]', '', (await price_span.inner_text(timeout=5000)).strip()).replace(',', '.')
                             if re.match(r'^\d+\.\d+$', price_text):
                                 preco_final = float(price_text)
                             else:
                                 print(f"Preço inválido na oferta {i}: {price_text}")
                         except Exception:
                             try:
-                                price_whole = await offer.locator("span.a-price-whole").first.inner_text(timeout=10000) or "0"
-                                price_fraction = await offer.locator("span.a-price-fraction").first.inner_text(timeout=10000) or "00"
+                                price_whole = (await offer.locator("span.a-price-whole").first.inner_text(timeout=5000)).strip()
+                                price_fraction = (await offer.locator("span.a-price-fraction").first.inner_text(timeout=5000)).strip()
                                 price_text = f"{re.sub(r'[^\d]', '', price_whole)}.{price_fraction}"
                                 if re.match(r'^\d+\.\d+$', price_text):
                                     preco_final = float(price_text)
@@ -300,22 +302,21 @@ async def extract_data_from_amazon(target_url: str) -> list:
                                     print(f"Preço inválido na oferta {i} (fallback): {price_text}")
                             except Exception as e:
                                 print(f"Erro ao extrair preço na oferta {i}: {e}")
+                                continue
 
-                        # Extrai vendedor
                         seller_name = "Não informado"
                         try:
                             seller = offer.locator("a.a-size-small.a-link-normal").first
-                            seller_name = await seller.inner_text(timeout=10000) or "Não informado"
+                            seller_name = (await seller.inner_text(timeout=5000)).strip()
                             seller_name = re.sub(r'Vendido por\s*', '', seller_name).strip()
                         except Exception as e:
                             print(f"Erro ao extrair vendedor na oferta {i}: {e}")
+                            continue
 
-                        # Evita duplicatas
                         if any(s['loja'] == seller_name for s in lojas):
                             print(f"Vendedor {seller_name} já capturado, ignorando duplicata")
                             continue
 
-                        # Monta dicionário da oferta
                         key_loja = seller_name.lower().replace(' ', '')
                         key_sku = f"{key_loja}_{sku}" if sku != "SKU não encontrado" else f"{key_loja}_sem_sku"
                         lojas.append({
@@ -337,14 +338,17 @@ async def extract_data_from_amazon(target_url: str) -> list:
                         continue
             except Exception as e:
                 print(f"Erro ao extrair ofertas: {e}")
+                print("Page content for debugging:", await page.content()[:1000])
 
-        except Exception as e:
-            print(f"Erro geral ao processar {target_url}: {e}")
         finally:
             await context.storage_state(path="amz_auth.json")
             await context.close()
             await browser.close()
 
+    # Calcular e exibir tempo de execução
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print(f"Execution time: {execution_time:.2f} seconds")
     return lojas
 
 def extract_data_from_markdown_beleza(markdown):
@@ -450,106 +454,154 @@ async def extract_data_from_meli(url: str) -> list:
     Returns:
         list: Lista de dicionários com dados dos vendedores, formatada como Beleza na Web
     """
+    # Record start time
+    start_time = time.time()
+    
     lojas = []
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
-            context = await browser.new_context()
-            
-            # Carrega cookies do arquivo meli_auth.json
+            # Configure context with minimal settings for speed
+            context = await browser.new_context(
+                storage_state="meli_auth.json",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 720}
+            )
             try:
-                with open('meli_auth.json', 'r') as f:
-                    auth_data = json.load(f)
-                    await context.add_cookies(auth_data['cookies'])
-            except Exception as e:
-                print(f"Erro ao carregar cookies: {e}")
-                return []
-            
-            page = await context.new_page()
-            await page.goto(url, timeout=60000)  # Timeout de 60 segundos
-            
-            # Extrair SKU da URL
-            sku = None
-            try:
-                # Updated regex to match /p/MLB12345678/ or item_id%3AMLB12345678
-                match = re.search(r'(?:/p/|item_id%3A)(MLB\d+)', url)
-                sku = match.group(1) if match else None
-            except Exception as e:
-                print(f"Erro ao extrair SKU: {e}")
-            if not sku:
-                print(f'SKU não encontrado na URL: {url}')
-            
-            # Extrair descrição
-            descricao = None
-            try:
-                descricao = await page.locator('.ui-pdp-title').inner_text()
-            except Exception as e:
-                print(f"Erro ao extrair descrição: {e}")
-                descricao = 'Descrição não encontrada'
-            
-            # Extrair imagem
-            imagem = None
-            try:
-                imagem = await page.locator(
-                    'xpath=//*[@id="root-app"]/div/div[1]/div/div/div/div/a/figure/img'
-                ).get_attribute('src')
-            except Exception as e:
-                print(f"Erro ao extrair imagem: {e}")
-            imagem = imagem if imagem else 'Imagem não encontrada'
-            
-            # Extrair review
-            review = 4.5  # Fallback value to match Beleza na Web
-            try:
-                review_text = await page.locator('.ui-pdp-reviews__rating__summary__average').inner_text()
-                review_match = re.search(r'(\d+\.\d+)', review_text)
-                if review_match:
-                    review = float(review_match.group(1))
-            except Exception as e:
-                print(f"Erro ao extrair review: {e}")
-            
-            # Extrair dados do melidata
-            try:
-                html_content = await page.content()
-                pattern = r'melidata\("add", "event_data", ({.*?})\);'
-                match = re.search(pattern, html_content, re.DOTALL)
+                page = await context.new_page()
                 
-                if match:
-                    event_data = json.loads(match.group(1))
-                    items = event_data.get('items', [])
+                # Block images and media to speed up page load
+                await context.route("**/*.{png,jpg,jpeg,webp,gif,mp4,webm}", lambda route: route.abort())
+                
+                # Navigate to the URL
+                response = await page.goto(url, timeout=30000)  # 30-second timeout
+                print(f"After navigation: {time.time() - start_time:.2f} seconds")
+                if response.status != 200:
+                    print(f"Failed to load page {url}. Status code: {response.status}")
+                    return lojas
+                
+                # Extract SKU from URL (fast regex operation)
+                sku = None
+                try:
+                    match = re.search(r'(?:/p/|item_id%3A)(MLB\d+)', url)
+                    sku = match.group(1) if match else None
+                    if not sku:
+                        print(f"SKU not found in URL: {url}")
+                except Exception as e:
+                    print(f"Error extracting SKU: {e}")
+                
+                # Parallelize extraction of description, image, and review
+                async def get_description():
+                    try:
+                        await page.wait_for_selector('h1.ui-pdp-title', timeout=7000)
+                        return await page.locator('h1.ui-pdp-title').inner_text()
+                    except Exception as e:
+                        print(f"Error extracting description: {e}")
+                        return "Descrição não encontrada"
+                
+                async def get_image():
+                    try:
+                        await page.wait_for_selector('img.ui-pdp-image', timeout=7000)
+                        return await page.locator('img.ui-pdp-image').first.get_attribute('src')
+                    except Exception as e:
+                        print(f"Error extracting image: {e}")
+                        return "Imagem não encontrada"
+                
+                async def get_review():
+                    try:
+                        await page.wait_for_selector('.ui-pdp-reviews__rating__summary__average', timeout=7000)
+                        review_text = await page.locator('.ui-pdp-reviews__rating__summary__average').inner_text()
+                        review_match = re.search(r'(\d+\.\d+)', review_text)
+                        return float(review_match.group(1)) if review_match else 4.5
+                    except Exception as e:
+                        print(f"Error extracting review: {e}")
+                        return 4.5
+                
+                # Run extraction tasks concurrently
+                try:
+                    descricao, imagem, review = await asyncio.gather(
+                        get_description(),
+                        get_image(),
+                        get_review()
+                    )
+                    print(f"After element extraction: {time.time() - start_time:.2f} seconds")
+                except Exception as e:
+                    print(f"Error during concurrent element extraction: {e}")
+                    descricao, imagem, review = "Descrição não encontrada", "Imagem não encontrada", 4.5
+                
+                # Extract seller data from melidata
+                try:
+                    script_content = await page.evaluate(
+                        """() => {
+                            const scripts = document.querySelectorAll('script');
+                            for (let script of scripts) {
+                                if (script.textContent.includes('melidata("add", "event_data"')) {
+                                    return script.textContent;
+                                }
+                            }
+                            return null;
+                        }"""
+                    )
                     
-                    for item in items:
-                        nome_loja = item.get('seller_name', 'Mercado Livre')
-                        key_loja = nome_loja.lower().replace(' ', '')  # Match Beleza na Web
-                        
-                        seller = {
-                            'sku': sku if sku else 'SKU não encontrado',
-                            'loja': nome_loja,
-                            'preco_final': float(item.get('price', 0.0)),
-                            'data_hora': datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
-                            'marketplace': 'Mercado Livre',
-                            'key_loja': key_loja,
-                            'key_sku': f'{key_loja}_{sku}' if key_loja and sku else None,
-                            'descricao': descricao,
-                            'review': review,
-                            'imagem': imagem,
-                            'status': 'ativo'
-                        }
-                        lojas.append(seller)
-            except Exception as e:
-                print(f"Erro ao extrair dados do melidata: {e}")
-            
-            # Salvar estado da sessão
-            try:
-                await context.storage_state(path='meli.json')
-            except Exception as e:
-                print(f"Erro ao salvar storage state: {e}")
+                    if script_content:
+                        pattern = r'melidata\("add", "event_data", ({.*?})\);'
+                        match = re.search(pattern, script_content, re.DOTALL)
+                        if match:
+                            event_data = json.loads(match.group(1))
+                            items = event_data.get('items', [])
+                            
+                            for item in items:
+                                nome_loja = item.get('seller_name', 'Mercado Livre')
+                                key_loja = nome_loja.lower().replace(' ', '')
+                                
+                                seller = {
+                                    'sku': sku if sku else 'SKU não encontrado',
+                                    'loja': nome_loja,
+                                    'preco_final': float(item.get('price', 0.0)),
+                                    'data_hora': datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                    'marketplace': 'Mercado Livre',
+                                    'key_loja': key_loja,
+                                    'key_sku': f'{key_loja}_{sku}' if key_loja and sku else None,
+                                    'descricao': descricao,
+                                    'review': review,
+                                    'imagem': imagem,
+                                    'status': 'ativo'
+                                }
+                                lojas.append(seller)
+                        else:
+                            print("Melidata event_data not found in script content")
+                    else:
+                        print("No melidata script found")
+                    print(f"After melidata extraction: {time.time() - start_time:.2f} seconds")
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing melidata JSON: {e}")
+                except Exception as e:
+                    print(f"Error extracting melidata: {e}")
                 
+                # Save session state
+                try:
+                    await context.storage_state(path='meli_auth.json')
+                except Exception as e:
+                    print(f"Error saving storage state: {e}")
+                    
+            except Exception as e:
+                print(f"Error processing page {url}: {e}")
+            finally:
+                await context.close()
+        except FileNotFoundError:
+            print("Error: meli_auth.json file not found. Please ensure it exists in the script's directory.")
+        except json.JSONDecodeError:
+            print("Error: meli_auth.json is invalid or corrupted. Please verify its contents.")
         except Exception as e:
-            print(f"Erro geral no processamento da URL {url}: {e}")
+            print(f"Error setting up context: {e}")
         finally:
-            await context.close()
             await browser.close()
+    
+    # Calculate and print execution time
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print(f"Execution time: {execution_time:.2f} seconds")
     
     return lojas
 
