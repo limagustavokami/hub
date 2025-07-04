@@ -10,7 +10,7 @@ import aiohttp
 from crawl4ai import AsyncWebCrawler
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
-from playwright.sync_api import sync_playwright
+
 
 
 async def scrape_epoca_cosmeticos(url):
