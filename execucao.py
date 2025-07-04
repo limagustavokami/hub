@@ -11,6 +11,7 @@ async def run_combined_crawler():
     print(f'Executando scrape_combined_crawl4ai.py às {datetime.now()}')
     try:
         combined_urls = [
+            "https://www.amazon.com.br/dp/B07LH9F1LX",
             "https://www.amazon.com.br/dp/B07YD6C2WH",
             "https://www.amazon.com.br/dp/B07LH9F1LX",
             "https://www.amazon.com.br/dp/B09MNL1QZQ",
