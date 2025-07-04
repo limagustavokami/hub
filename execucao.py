@@ -11,6 +11,7 @@ async def run_combined_crawler():
     print(f'Executando scrape_combined_crawl4ai.py às {datetime.now()}')
     try:
         combined_urls = [
+            'https://www.mercadolivre.com.br/shampoo-wella-invigo-nutri-enrich-1-litro-profissional/p/MLB20570794/s',
             "https://www.belezanaweb.com.br/wella-professionals-invigo-color-brilliance-shampoo-1-litro/ofertas-marketplace",
             "https://www.belezanaweb.com.br/wella-professionals-invigo-color-brilliance-condicionador-1-litro/ofertas-marketplace",
             "https://www.belezanaweb.com.br/wella-professionals-invigo-color-brilliance-mascara-capilar-500ml/ofertas-marketplace",
