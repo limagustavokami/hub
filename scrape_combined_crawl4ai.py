@@ -737,6 +737,7 @@ async def process_urls(urls):
     save_sem_dados_urls(sem_dados)
     print(f'Processamento concluído: {processed_count}/{total_urls} URLs processadas')
     print(f'Resultados: {successful_urls} URLs bem-sucedidas, {len(sem_dados)} URLs falharam, {len(sem_dados)} URLs sem dados')
+    print(sem_dados)
 
 if __name__ == "__main__":
     urls = [
