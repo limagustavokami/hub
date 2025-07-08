@@ -15,7 +15,7 @@ from playwright.async_api import async_playwright
 
 async def scrape_epoca_cosmeticos(url):
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=False)
+        browser = await playwright.chromium.launch(headless=True)
         context = await browser.new_context()
         page = await context.new_page()
         await page.goto(url)
@@ -31,6 +31,12 @@ async def scrape_epoca_cosmeticos(url):
             print(f"Erro ao extrair SKU: {e}")
         if not sku:
             print(f'SKU não encontrado na URL: {url}')
+            # Tirar screenshot da página
+            screenshots_dir = 'screenshots'
+            os.makedirs(screenshots_dir, exist_ok=True)
+            screenshot_path = os.path.join(screenshots_dir, f'sem_sku_{int(time.time())}.png')
+            await page.screenshot(path=screenshot_path)
+            print(f'Screenshot salva em: {screenshot_path}')
             return []
 
         products = await page.query_selector_all('div[data-testid="productItemComponent"]')
@@ -43,6 +49,30 @@ async def scrape_epoca_cosmeticos(url):
                 nome = await nome.inner_text() if nome else ""
                 nome = nome.strip()
                 
+                # Link
+                link_el = await product.query_selector('a[data-content-item="true"]')
+                link = await link_el.get_attribute("href") if link_el else ""
+                if link and not link.startswith("http"):
+                    link = "https://www.epocacosmeticos.com.br" + link
+
+                # Abre nova aba para detalhes
+                detail_page = await context.new_page()
+                await detail_page.goto(link)
+                await detail_page.wait_for_load_state("domcontentloaded")
+                await detail_page.wait_for_timeout(1500)
+
+                # --- Validação do EAN ---
+                ean_html = None
+                ean_el = await detail_page.query_selector('div.pdp-buybox_referCodeEan__5mCsd')
+                if ean_el:
+                    ean_text = await ean_el.inner_text()
+                    match_ean = re.search(r'Ref:\s*(\d+)', ean_text)
+                    if match_ean:
+                        ean_html = match_ean.group(1)
+                if not ean_html or ean_html != sku:
+                    await detail_page.close()
+                    break  # Finaliza o loop ao primeiro EAN divergente
+
                 # Preço (pega o preço à vista, se disponível)
                 preco_el = await product.query_selector('.product-price_spotPrice__k_4YC')
                 if not preco_el:
@@ -57,7 +87,7 @@ async def scrape_epoca_cosmeticos(url):
                 if review_el:
                     review_text = await review_el.inner_text()
                     review_text = review_text.strip()
-                    match = re.search(r"\(([0-9.,]+)\)", review_text)
+                    match = re.search(r"\\(([0-9.,]+)\\)", review_text)
                     if match:
                         review = float(match.group(1).replace(",", "."))
                 
@@ -66,18 +96,6 @@ async def scrape_epoca_cosmeticos(url):
                 imagem = await img_el.get_attribute("src") if img_el else ""
                 if imagem and imagem.startswith("//"):
                     imagem = f"https:{imagem}"
-                
-                # Link
-                link_el = await product.query_selector('a[data-content-item="true"]')
-                link = await link_el.get_attribute("href") if link_el else ""
-                if link and not link.startswith("http"):
-                    link = "https://www.epocacosmeticos.com.br" + link
-
-                # Abre nova aba para detalhes
-                detail_page = await context.new_page()
-                await detail_page.goto(link)
-                await detail_page.wait_for_load_state("domcontentloaded")
-                await detail_page.wait_for_timeout(1500)
                 
                 # Descrição (curta)
                 descricao = ""
