@@ -72,7 +72,6 @@ async def scrape_epoca_cosmeticos(url):
                 if not preco_el:
                     preco_el = await product.query_selector('.product-price_priceList__uepac')
                 preco = await preco_el.inner_text() if preco_el else ""
-                print(preco)
                 preco_final_str = re.sub(r"[^\d,]", "", preco).replace(",", ".")
                 preco_final =preco_final_str
                 #preco_final = float(preco_final_str) if preco_final_str else 0.0
