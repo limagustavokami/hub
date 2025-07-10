@@ -15,7 +15,7 @@ from playwright.async_api import async_playwright
 
 async def scrape_epoca_cosmeticos(url):
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await playwright.chromium.launch(headless=False)
         context = await browser.new_context()
         page = await context.new_page()
         await page.goto(url)
@@ -31,12 +31,6 @@ async def scrape_epoca_cosmeticos(url):
             print(f"Erro ao extrair SKU: {e}")
         if not sku:
             print(f'SKU não encontrado na URL: {url}')
-            # Tirar screenshot da página
-            screenshots_dir = 'screenshots'
-            os.makedirs(screenshots_dir, exist_ok=True)
-            screenshot_path = os.path.join(screenshots_dir, f'sem_sku_{int(time.time())}.png')
-            await page.screenshot(path=screenshot_path)
-            print(f'Screenshot salva em: {screenshot_path}')
             return []
 
         products = await page.query_selector_all('div[data-testid="productItemComponent"]')
