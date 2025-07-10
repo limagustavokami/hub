@@ -72,8 +72,10 @@ async def scrape_epoca_cosmeticos(url):
                 if not preco_el:
                     preco_el = await product.query_selector('.product-price_priceList__uepac')
                 preco = await preco_el.inner_text() if preco_el else ""
+                print(preco)
                 preco_final_str = re.sub(r"[^\d,]", "", preco).replace(",", ".")
-                preco_final = float(preco_final_str) if preco_final_str else 0.0
+                preco_final =preco_final_str
+                #preco_final = float(preco_final_str) if preco_final_str else 0.0
                 
                 # Review (pega o número entre parênteses)
                 review = 4.5  # Valor padrão, como na Beleza na Web
@@ -136,7 +138,7 @@ async def scrape_epoca_cosmeticos(url):
 
         await context.close()
         await browser.close()
-        return lojas                
+        return lojas                  
 
 async def extract_data_from_amazon(target_url: str) -> list:
     """
