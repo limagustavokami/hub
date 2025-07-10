@@ -11,6 +11,7 @@ async def run_combined_crawler():
     print(f'Executando scrape_combined_crawl4ai.py às {datetime.now()}')
     try:
         combined_urls = [
+            "https://www.mercadolivre.com.br/cadiveu-maxi-ondas-ativador-de-cachos-200ml-waves/p/MLB25477625/s?pdp_filters=seller_id%3A1190258457",
             "https://www.mercadolivre.com.br/cadiveu-boca-rosa-hair-quartzo-shine-protetor-termico-200ml/p/MLB19566993/s?pdp_filters=seller_id%3A1190258457",
             "https://www.mercadolivre.com.br/deva-curl-supercream-creme-de-coco-250g/p/MLB19514996/s?pdp_filters=seller_id%3A1190258457",
             "https://www.mercadolivre.com.br/wella-professionals-condicionador-fusion-200ml/p/MLB22343829/s?pdp_filters=seller_id%3A1190258457",
