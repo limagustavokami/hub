@@ -14,13 +14,16 @@ from playwright.async_api import async_playwright
 
 
 async def scrape_epoca_cosmeticos(url):
+    print(f"[Época] Iniciando raspagem para: {url}")
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await playwright.chromium.launch(headless=False)
         context = await browser.new_context()
         page = await context.new_page()
+        print("[Época] Página criada, navegando para a URL...")
         await page.goto(url)
         await page.wait_for_load_state("domcontentloaded")
         await page.wait_for_timeout(3000)
+        print("[Época] Página carregada.")
 
         # Extrair SKU da URL
         sku = None
@@ -28,21 +31,26 @@ async def scrape_epoca_cosmeticos(url):
             match = re.search(r'q=([\d]+)', url)
             sku = match.group(1) if match else None
         except Exception as e:
-            print(f"Erro ao extrair SKU: {e}")
+            print(f"[Época] Erro ao extrair SKU: {e}")
         if not sku:
-            print(f'SKU não encontrado na URL: {url}')
+            print(f'[Época] SKU não encontrado na URL: {url}')
             return []
 
+        print(f"[Época] SKU extraído: {sku}")
         products = await page.query_selector_all('div[data-testid="productItemComponent"]')
+        print(f"[Época] {len(products)} produtos encontrados na página.")
+
         lojas = []
 
         for idx, product in enumerate(products):
+            print(f"[Época] Processando produto {idx+1}/{len(products)}")
             try:
                 # Nome do produto
                 nome = await product.query_selector('.name')
                 nome = await nome.inner_text() if nome else ""
                 nome = nome.strip()
-                
+                print(f"[Época] Nome do produto: {nome}")
+
                 # Link
                 link_el = await product.query_selector('a[data-content-item="true"]')
                 link = await link_el.get_attribute("href") if link_el else ""
@@ -54,6 +62,7 @@ async def scrape_epoca_cosmeticos(url):
                 await detail_page.goto(link)
                 await detail_page.wait_for_load_state("domcontentloaded")
                 await detail_page.wait_for_timeout(1500)
+                print(f"[Época] Página de detalhes carregada.")
 
                 # --- Validação do EAN ---
                 ean_html = None
@@ -64,6 +73,7 @@ async def scrape_epoca_cosmeticos(url):
                     if match_ean:
                         ean_html = match_ean.group(1)
                 if not ean_html or ean_html != sku:
+                    print(f"[Época] EAN divergente ou não encontrado: {ean_html} (esperado: {sku})")
                     await detail_page.close()
                     break  # Finaliza o loop ao primeiro EAN divergente
 
@@ -73,9 +83,9 @@ async def scrape_epoca_cosmeticos(url):
                     preco_el = await product.query_selector('.product-price_priceList__uepac')
                 preco = await preco_el.inner_text() if preco_el else ""
                 preco_final_str = re.sub(r"[^\d,]", "", preco).replace(",", ".")
-                preco_final =preco_final_str
-                #preco_final = float(preco_final_str) if preco_final_str else 0.0
-                
+                preco_final = preco_final_str
+                print(f"[Época] Preço final: {preco_final}")
+
                 # Review (pega o número entre parênteses)
                 review = 4.5  # Valor padrão, como na Beleza na Web
                 review_el = await product.query_selector('.rate p')
@@ -85,13 +95,15 @@ async def scrape_epoca_cosmeticos(url):
                     match = re.search(r"\\(([0-9.,]+)\\)", review_text)
                     if match:
                         review = float(match.group(1).replace(",", "."))
-                
+                print(f"[Época] Review: {review}")
+
                 # Imagem
                 img_el = await product.query_selector("img")
                 imagem = await img_el.get_attribute("src") if img_el else ""
                 if imagem and imagem.startswith("//"):
                     imagem = f"https:{imagem}"
-                
+                print(f"[Época] Imagem: {imagem}")
+
                 # Descrição (curta)
                 descricao = ""
                 desc_el = await detail_page.query_selector('p[data-product-title="true"]')
@@ -102,14 +114,16 @@ async def scrape_epoca_cosmeticos(url):
                     meta_desc = await detail_page.query_selector('meta[name="description"]')
                     if meta_desc:
                         descricao = await meta_desc.get_attribute("content")
-                
+                print(f"[Época] Descrição: {descricao}")
+
                 # Nome da loja (quem vende e entrega)
                 loja = "Época Cosméticos"
                 loja_el = await detail_page.query_selector('.pdp-buybox-seller_sellerInfo__BmOa4 a span')
                 if loja_el:
                     loja = await loja_el.inner_text()
                     loja = loja.strip()
-                
+                print(f"[Época] Loja: {loja}")
+
                 await detail_page.close()
 
                 data_hora = datetime.utcnow().isoformat() + "Z"
@@ -131,38 +145,31 @@ async def scrape_epoca_cosmeticos(url):
                     "imagem": imagem,
                     "status": status
                 }
+                print(f"[Época] Produto final: {result}")
                 lojas.append(result)
             except Exception as e:
-                print(f"Erro ao processar produto {idx}: {e}")
+                print(f"[Época] Erro ao processar produto {idx}: {e}")
 
         await context.close()
         await browser.close()
-        return lojas                  
+        print(f"[Época] Raspagem finalizada para: {url}")
+        return lojas
 
 async def extract_data_from_amazon(target_url: str) -> list:
-    """
-    Extrai dados de vendedores de uma página de produto da Amazon, incluindo vendedor principal
-    e outras ofertas, usando Playwright. Retorna uma lista de dicionários com os dados formatados.
-
-    Args:
-        target_url: URL da página de produto da Amazon.
-
-    Returns:
-        list: Lista de dicionários com dados dos vendedores.
-    """
+    print(f"[Amazon] Iniciando raspagem para: {target_url}")
     start_time = time.time()
     lojas = []
     storage_file = "amz_auth.json"
 
-    # Verificar se o arquivo de autenticação existe
     if not os.path.exists(storage_file):
-        print(f"Erro: Arquivo de autenticação {storage_file} não encontrado.")
+        print(f"[Amazon] Erro: Arquivo de autenticação {storage_file} não encontrado.")
         return lojas
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context()
         page = await context.new_page()
+        print("[Amazon] Página criada, carregando cookies e navegando para a URL...")
 
         try:
             # Carregar cookies
@@ -170,19 +177,19 @@ async def extract_data_from_amazon(target_url: str) -> list:
                 with open(storage_file, 'r') as f:
                     auth_data = json.load(f)
                     await context.add_cookies(auth_data.get('cookies', []))
-                print(f"After loading cookies: {time.time() - start_time:.2f} seconds")
+                print(f"[Amazon] Cookies carregados.")
             except Exception as e:
-                print(f"Erro ao carregar cookies: {e}")
+                print(f"[Amazon] Erro ao carregar cookies: {e}")
                 return lojas
 
             # Navegar para a URL
-            print(f"Navegando para {target_url}")
+            print(f"[Amazon] Navegando para {target_url}")
             response = await page.goto(target_url, timeout=30000)
             if response and response.status != 200:
-                print(f"Falha ao carregar página {target_url}. Status: {response.status}")
+                print(f"[Amazon] Falha ao carregar página {target_url}. Status: {response.status}")
                 return lojas
             await page.wait_for_load_state('domcontentloaded', timeout=15000)
-            print(f"After navigation: {time.time() - start_time:.2f} seconds")
+            print(f"[Amazon] Página carregada.")
 
             # Extrair SKU
             sku = "SKU não encontrado"
@@ -190,8 +197,9 @@ async def extract_data_from_amazon(target_url: str) -> list:
                 match = re.search(r'/dp/([A-Z0-9]{10})', target_url)
                 if match:
                     sku = match.group(1)
+                print(f"[Amazon] SKU extraído: {sku}")
             except Exception as e:
-                print(f"Erro ao extrair SKU: {e}")
+                print(f"[Amazon] Erro ao extrair SKU: {e}")
 
             # Funções para extração concorrente
             async def get_description():
@@ -229,9 +237,10 @@ async def extract_data_from_amazon(target_url: str) -> list:
                 get_image(),
                 get_review()
             )
-            print(f"After element extraction: {time.time() - start_time:.2f} seconds")
+            print(f"[Amazon] Descrição: {descricao}, Imagem: {imagem}, Review: {review}")
 
             # Extrair vendedor principal e preço
+            print(f"[Amazon] Extraindo vendedor principal e preço...")
             seller_name = "Não informado"
             preco_final = 0.0
             try:
@@ -357,11 +366,11 @@ async def extract_data_from_amazon(target_url: str) -> list:
             await context.storage_state(path="amz_auth.json")
             await context.close()
             await browser.close()
+            print(f"[Amazon] Raspagem finalizada para: {target_url}")
 
-    # Calcular e exibir tempo de execução
     end_time = time.time()
     execution_time = end_time - start_time
-    print(f"Execution time: {execution_time:.2f} seconds")
+    print(f"[Amazon] Tempo de execução: {execution_time:.2f} segundos")
     return lojas
 
 def extract_data_from_markdown_beleza(markdown):
@@ -458,20 +467,9 @@ def extract_data_from_markdown_beleza(markdown):
     return lojas
 
 async def extract_data_from_meli(url: str) -> list:
-    """
-    Extrai dados de produtos do Mercado Livre e retorna uma lista de vendedores usando Playwright Async API.
-    
-    Args:
-        url: URL da página do produto
-        
-    Returns:
-        list: Lista de dicionários com dados dos vendedores, formatada como Beleza na Web
-    """
-    # Record start time
+    print(f"[Mercado Livre] Iniciando raspagem para: {url}")
     start_time = time.time()
-    
     lojas = []
-    
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
@@ -489,9 +487,9 @@ async def extract_data_from_meli(url: str) -> list:
                 
                 # Navigate to the URL
                 response = await page.goto(url, timeout=30000)  # 30-second timeout
-                print(f"After navigation: {time.time() - start_time:.2f} seconds")
+                print(f"[Mercado Livre] After navigation: {time.time() - start_time:.2f} seconds")
                 if response.status != 200:
-                    print(f"Failed to load page {url}. Status code: {response.status}")
+                    print(f"[Mercado Livre] Failed to load page {url}. Status code: {response.status}")
                     return lojas
                 
                 # Extract SKU from URL (fast regex operation)
@@ -500,9 +498,9 @@ async def extract_data_from_meli(url: str) -> list:
                     match = re.search(r'(?:/p/|item_id%3A)(MLB\d+)', url)
                     sku = match.group(1) if match else None
                     if not sku:
-                        print(f"SKU not found in URL: {url}")
+                        print(f"[Mercado Livre] SKU not found in URL: {url}")
                 except Exception as e:
-                    print(f"Error extracting SKU: {e}")
+                    print(f"[Mercado Livre] Error extracting SKU: {e}")
                 
                 # Parallelize extraction of description, image, and review
                 async def get_description():
@@ -510,7 +508,7 @@ async def extract_data_from_meli(url: str) -> list:
                         await page.wait_for_selector('h1.ui-pdp-title', timeout=7000)
                         return await page.locator('h1.ui-pdp-title').inner_text()
                     except Exception as e:
-                        print(f"Error extracting description: {e}")
+                        print(f"[Mercado Livre] Error extracting description: {e}")
                         return "Descrição não encontrada"
                 
                 async def get_image():
@@ -518,7 +516,7 @@ async def extract_data_from_meli(url: str) -> list:
                         await page.wait_for_selector('img.ui-pdp-image', timeout=7000)
                         return await page.locator('img.ui-pdp-image').first.get_attribute('src')
                     except Exception as e:
-                        print(f"Error extracting image: {e}")
+                        print(f"[Mercado Livre] Error extracting image: {e}")
                         return "Imagem não encontrada"
                 
                 async def get_review():
@@ -528,7 +526,7 @@ async def extract_data_from_meli(url: str) -> list:
                         review_match = re.search(r'(\d+\.\d+)', review_text)
                         return float(review_match.group(1)) if review_match else 4.5
                     except Exception as e:
-                        print(f"Error extracting review: {e}")
+                        print(f"[Mercado Livre] Error extracting review: {e}")
                         return 4.5
                 
                 # Run extraction tasks concurrently
@@ -538,9 +536,9 @@ async def extract_data_from_meli(url: str) -> list:
                         get_image(),
                         get_review()
                     )
-                    print(f"After element extraction: {time.time() - start_time:.2f} seconds")
+                    print(f"[Mercado Livre] After element extraction: {time.time() - start_time:.2f} seconds")
                 except Exception as e:
-                    print(f"Error during concurrent element extraction: {e}")
+                    print(f"[Mercado Livre] Error during concurrent element extraction: {e}")
                     descricao, imagem, review = "Descrição não encontrada", "Imagem não encontrada", 4.5
                 
                 # Extract seller data from melidata
@@ -586,20 +584,20 @@ async def extract_data_from_meli(url: str) -> list:
                             print("Melidata event_data not found in script content")
                     else:
                         print("No melidata script found")
-                    print(f"After melidata extraction: {time.time() - start_time:.2f} seconds")
+                    print(f"[Mercado Livre] After melidata extraction: {time.time() - start_time:.2f} seconds")
                 except json.JSONDecodeError as e:
-                    print(f"Error parsing melidata JSON: {e}")
+                    print(f"[Mercado Livre] Error parsing melidata JSON: {e}")
                 except Exception as e:
-                    print(f"Error extracting melidata: {e}")
+                    print(f"[Mercado Livre] Error extracting melidata: {e}")
                 
                 # Save session state
                 try:
                     await context.storage_state(path='meli_auth.json')
                 except Exception as e:
-                    print(f"Error saving storage state: {e}")
+                    print(f"[Mercado Livre] Error saving storage state: {e}")
                     
             except Exception as e:
-                print(f"Error processing page {url}: {e}")
+                print(f"[Mercado Livre] Error processing page {url}: {e}")
             finally:
                 await context.close()
         except FileNotFoundError:
@@ -607,14 +605,13 @@ async def extract_data_from_meli(url: str) -> list:
         except json.JSONDecodeError:
             print("Error: meli_auth.json is invalid or corrupted. Please verify its contents.")
         except Exception as e:
-            print(f"Error setting up context: {e}")
+            print(f"[Mercado Livre] Error setting up context: {e}")
         finally:
             await browser.close()
     
-    # Calculate and print execution time
     end_time = time.time()
     execution_time = end_time - start_time
-    print(f"Execution time: {execution_time:.2f} seconds")
+    print(f"[Mercado Livre] Tempo de execução: {execution_time:.2f} segundos")
     
     return lojas
 
@@ -754,8 +751,6 @@ async def process_urls(urls):
 
 if __name__ == "__main__":
     urls = [
-        "https://www.belezanaweb.com.br/wella-professionals-invigo-color-brilliance-condicionador-1-litro/ofertas-marketplace",
-        "https://www.epocacosmeticos.com.br/pesquisa?q=8005610672427",
-        # Adicione outras URLs para Amazon, Beleza na Web, Mercado Livre, etc.
+        "https://www.epocacosmeticos.com.br/pesquisa?q=8005610672427"       # Adicione outras URLs para Amazon, Beleza na Web, Mercado Livre, etc.
     ]
     asyncio.run(process_urls(urls))
