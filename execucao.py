@@ -11,6 +11,10 @@ async def run_combined_crawler():
     print(f'Executando scrape_combined_crawl4ai.py às {datetime.now()}')
     try:
         combined_urls = [
+            "https://www.belezanaweb.com.br/cadiveu-essentials-quartzo-shine-by-boca-rosa-hair-oleo-capilar-quartzo-liquido-65ml/ofertas-marketplace",
+            "https://www.belezanaweb.com.br/senscience-cpr-step-3-condicionador-1l",
+            "https://www.belezanaweb.com.br/joico-kpak-color-therapy-smart-release-condicionador-1-litro/ofertas-marketplace",
+            "https://www.belezanaweb.com.br/joico-kpak-color-therapy-smart-release-shampoo-1-litro/ofertas-marketplace",
             "https://www.epocacosmeticos.com.br/pesquisa?q=7896235353652",
             "https://www.epocacosmeticos.com.br/pesquisa?q=4064666318356",
             "https://www.mercadolivre.com.br/wella-professionals-invigo-nutri-enrich-shampoo-1000ml/p/MLB19702074/s?pdp_filters=seller_id%3A1190258457",
