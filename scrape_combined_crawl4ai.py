@@ -616,7 +616,7 @@ async def extract_data_from_meli(url: str) -> list:
     return lojas
 
 async def crawl_url(crawler, url, max_retries=3):
-    """Extrai dados de uma URL usando Crawl4AI ou Playwright (para Mercado Livre e Amazon) com re-tentativas."""
+    """Extrai dados de uma URL usando Crawl4AI ou Playwright (para Mercado Livre, Amazon e Beleza na Web) com re-tentativas."""
     for attempt in range(max_retries):
         try:
             print(f'Extraindo dados da URL: {url} (Tentativa {attempt + 1}/{max_retries})')
@@ -625,20 +625,61 @@ async def crawl_url(crawler, url, max_retries=3):
             elif 'amazon' in url.lower():
                 lojas = await extract_data_from_amazon(url)
             elif 'epoca' in url.lower():
-                lojas = await scrape_epoca_cosmeticos(url)  # Usa await em vez de asyncio.run
+                lojas = await scrape_epoca_cosmeticos(url)
             elif 'belezanaweb' in url.lower():
-                result = await crawler.arun(
-                    url=url,
-                    timeout=180,
-                    js_enabled=True,
-                    bypass_cache=True,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    },
-                )
-                markdown_content = result.markdown
-                print('Markdown gerado:')
-                lojas = extract_data_from_markdown_beleza(markdown_content)
+                # Configuração para Beleza na Web com autenticação
+                storage_file = "beleza_auth.json"
+                
+                # Verificar se o arquivo de autenticação existe
+                if not os.path.exists(storage_file):
+                    print(f"[Beleza na Web] Erro: Arquivo de autenticação {storage_file} não encontrado.")
+                    return []
+
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    context = await browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        viewport={"width": 1280, "height": 720}
+                    )
+                    try:
+                        # Carregar cookies
+                        try:
+                            with open(storage_file, 'r') as f:
+                                auth_data = json.load(f)
+                                await context.add_cookies(auth_data.get('cookies', []))
+                            print(f"[Beleza na Web] Cookies carregados de {storage_file}.")
+                        except Exception as e:
+                            print(f"[Beleza na Web] Erro ao carregar cookies: {e}")
+                            await context.close()
+                            await browser.close()
+                            return []
+
+                        # Configurar o crawler com o contexto autenticado
+                        result = await crawler.arun(
+                            url=url,
+                            timeout=180,
+                            js_enabled=True,
+                            bypass_cache=True,
+                            headers={
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                            },
+                            browser_context=context
+                        )
+                        markdown_content = result.markdown
+                        print('[Beleza na Web] Markdown gerado:')
+                        lojas = extract_data_from_markdown_beleza(markdown_content)
+                    except Exception as e:
+                        print(f"[Beleza na Web] Erro ao crawlear: {e}")
+                        lojas = []
+                    finally:
+                        # Salvar estado da sessão
+                        try:
+                            await context.storage_state(path=storage_file)
+                            print(f"[Beleza na Web] Estado da sessão salvo em {storage_file}.")
+                        except Exception as e:
+                            print(f"[Beleza na Web] Erro ao salvar estado da sessão: {e}")
+                        await context.close()
+                        await browser.close()
             else:
                 print(f'URL não reconhecida: {url}')
                 return []
@@ -658,7 +699,7 @@ async def crawl_url(crawler, url, max_retries=3):
         except Exception as e:
             print(f'Erro ao crawlear a URL {url} na tentativa {attempt + 1}: {e}')
             return []
-
+            
 async def send_to_api(data):
     """Envia os dados dos vendedores para a API (POST)."""
     api_url = os.environ.get('API_URL', 'https://www.price.kamico.com.br/api/products')
